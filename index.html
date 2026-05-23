@@ -29,14 +29,20 @@
     const KEY = '__AT_API_KEY__';
     const BASE = 'https://api.at.govt.nz/gtfs/v3';
 
-    const ROUTES = [];
-const SEARCH_NAMES = [
-  'Newmarket Train Station',
-  'Avondale Train Station',
-  'Mount Albert Train Station',
-  'Newmarket',
-  'Avondale'
-];
+    const ROUTES = [
+      {
+        title: 'Newmarket → Avondale (to work)',
+        stop_ids: ['115-96c3c7be'],
+        wantHeadsign: ['swanson', 'henderson', 'ranui', 'sturges'],
+        wantRoute: ['wst', 'west']
+      },
+      {
+        title: 'Avondale → Newmarket (home)',
+        stop_ids: ['105-474861ff'],
+        wantHeadsign: ['waitemat', 'britomart'],
+        wantRoute: ['wst', 'west']
+      }
+    ];
 
     async function api(path) {
       try {
@@ -90,8 +96,8 @@ const SEARCH_NAMES = [
         departure_time: a.departure_time || a.arrival_time || a.scheduled_departure_time,
         trip_headsign: a.trip_headsign || a.headsign || '',
         route_short_name: a.route_short_name || '',
-        stop_id: a.stop_id,
-        raw: a
+        route_id: a.route_id || '',
+        stop_id: a.stop_id
       };
     }
 
@@ -113,10 +119,10 @@ const SEARCH_NAMES = [
         for (const t of (res.body.data || [])) allTrips.push(extractDeparture(t));
       }
 
-      const want = route.wantHeadsign;
+      const wantH = route.wantHeadsign;
       let filtered = allTrips.filter(t => {
         const h = (t.trip_headsign || '').toLowerCase();
-        return want.some(w => h.includes(w));
+        return wantH.some(w => h.includes(w));
       });
 
       const showAll = filtered.length === 0 && allTrips.length > 0;
@@ -130,40 +136,27 @@ const SEARCH_NAMES = [
 
       const html = [`<h2>${escapeHtml(route.title)}</h2>`];
       if (errors.length) html.push(`<div class="err">${escapeHtml(errors.join('\n\n'))}</div>`);
-      if (showAll && filtered.length) html.push(`<p class="muted">No headsign matched — showing all directions so we can see what's available:</p>`);
+      if (showAll && filtered.length) html.push(`<p class="muted">No headsign matched filter — showing all trips at this stop:</p>`);
       if (filtered.length === 0 && !errors.length) {
-        html.push(`<div class="empty">No upcoming trips returned by API</div>`);
+        html.push(`<div class="empty">No upcoming trains in the next 2 hours</div>`);
       } else {
         for (const t of filtered.slice(0, 4)) {
           const label = t.mins <= 0 ? 'now' : `${t.mins} min`;
           const cls = t.mins <= 1 ? 'now' : (t.mins <= 4 ? 'soon' : '');
           const time = (t.departure_time || '').slice(0, 5);
-          html.push(`<div class="train"><span class="mins ${cls}">${escapeHtml(label)}</span><span class="meta">${escapeHtml(time)}<br>${escapeHtml(t.trip_headsign || '?')}</span></div>`);
+          html.push(`<div class="train"><span class="mins ${cls}">${escapeHtml(label)}</span><span class="meta">${escapeHtml(time)}<br>to ${escapeHtml(t.trip_headsign || '?')}</span></div>`);
         }
       }
-      html.push(`<details><summary class="muted">Debug · raw API responses</summary><div class="raw">${escapeHtml(JSON.stringify(raws, null, 2))}</div></details>`);
+      html.push(`<details><summary class="muted">Debug</summary><div class="raw">${escapeHtml(JSON.stringify(raws, null, 2))}</div></details>`);
       return html.join('');
     }
 
-        async function run() {
+    async function run() {
       document.getElementById('time').textContent = 'Updated ' + new Date().toLocaleTimeString('en-NZ', { timeZone: 'Pacific/Auckland' });
       const out = document.getElementById('out');
       out.innerHTML = '<p class="muted">Loading…</p>';
       const parts = [];
-      for (const name of SEARCH_NAMES) {
-        const res = await api(`/stops?filter[stop_name]=${encodeURIComponent(name)}`);
-        parts.push(`<h2>${escapeHtml(name)}</h2>`);
-        if (!res.ok) {
-          parts.push(`<div class="err">HTTP ${res.status}\n${escapeHtml(JSON.stringify(res.body).slice(0, 500))}</div>`);
-        } else {
-          const stops = res.body.data || [];
-          parts.push(`<p class="muted">Found ${stops.length} stops</p>`);
-          for (const s of stops) {
-            const a = s.attributes || {};
-            parts.push(`<div class="train"><span class="meta"><b>${escapeHtml(a.stop_name || '?')}</b><br>stop_id: <code>${escapeHtml(a.stop_id || s.id)}</code><br>lat/lon: ${a.stop_lat}, ${a.stop_lon}</span></div>`);
-          }
-        }
-      }
+      for (const r of ROUTES) parts.push(await renderRoute(r));
       out.innerHTML = parts.join('');
     }
 
