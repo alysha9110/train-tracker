@@ -41,15 +41,26 @@
     const CITY = ['brit', 'waitemat'];
     const EAST = ['manukau', 'panmure', 'glen innes', 'meadowbank', 'sylvia', 'otahuhu'];
 
-    const TRANSFER_BUFFER = 3;
+    const STOPS = {
+      newmarket: '115-96c3c7be',
+      orakei:    '116-214837ca',
+      waitemata: '133-08da14b5',
+      avondale:  '105-474861ff'
+    };
+
+    const STOP_LABEL = {
+      newmarket: 'Newmarket', orakei: 'Orakei', waitemata: 'Waitematā', avondale: 'Avondale'
+    };
 
     const LEGS = {
-      newmarket_avondale: { title: 'Newmarket → Avondale', stop_ids: ['115-96c3c7be'], wantDest: WEST, transit: 13, arriveLabel: 'Avondale' },
-      orakei_waitemata:   { title: 'Orakei → Waitematā',   stop_ids: ['116-214837ca'], wantDest: CITY, transit: 10, arriveLabel: 'Waitematā' },
-      waitemata_avondale: { title: 'Waitematā → Avondale (leg 2)', stop_ids: ['133-08da14b5'], wantDest: WEST, transit: 22, arriveLabel: 'Avondale' },
-      avondale_newmarket: { title: 'Avondale → Newmarket', stop_ids: ['105-474861ff'], wantDest: CITY, transit: 13, arriveLabel: 'Newmarket' },
-      waitemata_orakei:   { title: 'Waitematā → Orakei (leg 2)', stop_ids: ['133-08da14b5'], wantDest: EAST, transit: 10, arriveLabel: 'Orakei' }
+      newmarket_avondale: { title: 'Newmarket → Avondale', from: 'newmarket', to: 'avondale',  wantDest: WEST },
+      orakei_waitemata:   { title: 'Orakei → Waitematā',   from: 'orakei',    to: 'waitemata', wantDest: CITY },
+      waitemata_avondale: { title: 'Waitematā → Avondale (leg 2)', from: 'waitemata', to: 'avondale', wantDest: WEST },
+      avondale_newmarket: { title: 'Avondale → Newmarket', from: 'avondale',  to: 'newmarket', wantDest: CITY },
+      waitemata_orakei:   { title: 'Waitematā → Orakei (leg 2)', from: 'waitemata', to: 'orakei', wantDest: EAST }
     };
+
+    const TRANSFER_BUFFER = 3;
 
     const GROUPS = [
       {
@@ -60,7 +71,7 @@
       {
         label: 'To home',
         legs: ['avondale_newmarket', 'waitemata_orakei'],
-        chain: { title: 'Orakei route — matched chain', leg1: 'avondale_newmarket', leg2: 'waitemata_orakei', leg1Transit: 22 }  // override: this chain uses Avondale→Waitematā transit (22), not Avondale→Newmarket (13)
+        chain: { title: 'Orakei route — matched chain', leg1: 'avondale_newmarket', leg1ArriveStop: 'waitemata', leg2: 'waitemata_orakei' }
       }
     ];
 
@@ -76,16 +87,10 @@
       }
     }
 
-    function escapeHtml(s) {
-      return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-    }
+    function escapeHtml(s) { return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
     function nzDateParts() {
-      const fmt = new Intl.DateTimeFormat('en-NZ', {
-        timeZone: 'Pacific/Auckland',
-        year: 'numeric', month: '2-digit', day: '2-digit',
-        hour: '2-digit', minute: '2-digit', hour12: false
-      });
+      const fmt = new Intl.DateTimeFormat('en-NZ', { timeZone: 'Pacific/Auckland', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
       const parts = {};
       for (const p of fmt.formatToParts(new Date())) if (p.type !== 'literal') parts[p.type] = p.value;
       return parts;
@@ -100,9 +105,7 @@
 
     function secToHHMM(sec) {
       sec = ((sec % 86400) + 86400) % 86400;
-      const h = Math.floor(sec / 3600);
-      const m = Math.floor((sec % 3600) / 60);
-      return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+      return `${String(Math.floor(sec / 3600)).padStart(2,'0')}:${String(Math.floor((sec % 3600) / 60)).padStart(2,'0')}`;
     }
 
     function getDestination(headsign) {
@@ -117,83 +120,96 @@
     }
 
     function cleanHeadsign(headsign) {
-      return (headsign || '')
-        .replace(/\s\d+\b/g, '')
-        .replace(/\bTo\b/g, '→')
-        .replace(/\bVia\b/g, 'via')
-        .trim();
+      return (headsign || '').replace(/\s\d+\b/g, '').replace(/\bTo\b/g, '→').replace(/\bVia\b/g, 'via').trim();
     }
 
-    async function fetchTrips(stop_id) {
-      const p = nzDateParts();
-      const date = `${p.year}-${p.month}-${p.day}`;
-      const hour = parseInt(p.hour, 10);
-      const qs = `filter[date]=${date}&filter[start_hour]=${hour}&filter[hour_range]=2`;
-      return api(`/stops/${encodeURIComponent(stop_id)}/stoptrips?${qs}`);
-    }
-
-    function extractDeparture(item) {
+    function extractTrip(item) {
       const a = item.attributes || item;
       return {
-        departure_time: a.departure_time || a.arrival_time || a.scheduled_departure_time,
+        trip_id: a.trip_id || item.id,
+        departure_time: a.departure_time || a.scheduled_departure_time || a.arrival_time,
+        arrival_time: a.arrival_time || a.scheduled_arrival_time || a.departure_time,
         trip_headsign: a.trip_headsign || a.headsign || ''
       };
     }
 
-    async function getLegTrips(leg, nowSec) {
-      const trips = [];
-      const errors = [];
-      for (const sid of leg.stop_ids) {
-        const res = await fetchTrips(sid);
-        if (!res.ok) { errors.push(`stop ${sid}: HTTP ${res.status}`); continue; }
-        for (const t of (res.body.data || [])) trips.push(extractDeparture(t));
-      }
-      let filtered = trips.filter(t => matchesDirection(t.trip_headsign, leg.wantDest));
-      filtered = filtered.map(t => {
-        const tsec = parseTime(t.departure_time);
-        return { ...t, sec: tsec, mins: tsec == null ? null : Math.round((tsec - nowSec) / 60) };
-      }).filter(t => t.sec != null && t.mins >= -1).sort((a,b) => a.sec - b.sec);
-      return { trips: filtered, errors };
+    async function fetchStop(stop_id) {
+      const p = nzDateParts();
+      const date = `${p.year}-${p.month}-${p.day}`;
+      const hour = parseInt(p.hour, 10);
+      const qs = `filter[date]=${date}&filter[start_hour]=${hour}&filter[hour_range]=2`;
+      const res = await api(`/stops/${encodeURIComponent(stop_id)}/stoptrips?${qs}`);
+      if (!res.ok) return { ok: false, status: res.status, body: res.body };
+      const trips = (res.body.data || []).map(extractTrip);
+      const byTripId = {};
+      for (const t of trips) byTripId[t.trip_id] = t;
+      return { ok: true, trips, byTripId };
     }
 
-    function renderLegSection(leg, data) {
+    function buildLegTrips(legId, stopData, nowSec) {
+      const leg = LEGS[legId];
+      const origin = stopData[leg.from];
+      const dest = stopData[leg.to];
+      if (!origin?.ok) return { trips: [], error: `${leg.from} fetch failed${origin?.status ? ' (HTTP ' + origin.status + ')' : ''}` };
+
+      let trips = origin.trips
+        .filter(t => matchesDirection(t.trip_headsign, leg.wantDest))
+        .map(t => {
+          const depSec = parseTime(t.departure_time);
+          const mins = depSec == null ? null : Math.round((depSec - nowSec) / 60);
+          const destTrip = dest?.byTripId?.[t.trip_id];
+          const arrSec = destTrip ? parseTime(destTrip.arrival_time) : null;
+          return { ...t, depSec, arrSec, mins };
+        })
+        .filter(t => t.depSec != null && t.mins >= -1)
+        .sort((a, b) => a.depSec - b.depSec);
+
+      return { trips };
+    }
+
+    function renderLegSection(leg, legData) {
       const html = [`<h2>${escapeHtml(leg.title)}</h2>`];
-      if (data.errors.length) html.push(`<div class="err">${escapeHtml(data.errors.join('\n'))}</div>`);
-      if (data.trips.length === 0 && !data.errors.length) {
+      if (legData.error) html.push(`<div class="err">${escapeHtml(legData.error)}</div>`);
+      if (legData.trips.length === 0 && !legData.error) {
         html.push(`<div class="empty">No upcoming trains</div>`);
       } else {
-        for (const t of data.trips.slice(0, 3)) {
+        for (const t of legData.trips.slice(0, 3)) {
           const label = t.mins <= 0 ? 'now' : `${t.mins} min`;
           const cls = t.mins <= 1 ? 'now' : (t.mins <= 4 ? 'soon' : '');
           const depTime = (t.departure_time || '').slice(0, 5);
-          const arrTime = secToHHMM(t.sec + leg.transit * 60);
-          html.push(`<div class="train"><span class="mins ${cls}">${escapeHtml(label)}</span><span class="meta"><span class="times">${escapeHtml(depTime)} → ~${escapeHtml(arrTime)}</span><br>${escapeHtml(cleanHeadsign(t.trip_headsign))}</span></div>`);
+          const arrTime = t.arrSec != null ? secToHHMM(t.arrSec) : '?';
+          html.push(`<div class="train"><span class="mins ${cls}">${escapeHtml(label)}</span><span class="meta"><span class="times">${escapeHtml(depTime)} → ${escapeHtml(arrTime)}</span><br>${escapeHtml(cleanHeadsign(t.trip_headsign))}</span></div>`);
         }
       }
       return html.join('');
     }
 
-    function renderChainSection(chainCfg, leg1, leg2, leg1Data, leg2Data) {
-      // For home chain, leg1 transit to Waitematā differs from leg1's own arriveLabel (Newmarket).
-      const leg1Transit = chainCfg.leg1Transit != null ? chainCfg.leg1Transit : leg1.transit;
+    function renderChainSection(chainCfg, stopData, legData) {
+      const leg1 = LEGS[chainCfg.leg1], leg2 = LEGS[chainCfg.leg2];
+      const transferStopKey = chainCfg.leg1ArriveStop || leg1.to;
+      const transferStop = stopData[transferStopKey];
+      const transferLabel = STOP_LABEL[transferStopKey] || transferStopKey;
+      const leg1Data = legData[chainCfg.leg1], leg2Data = legData[chainCfg.leg2];
+
       const pairs = [];
       for (const t1 of leg1Data.trips) {
-        const arriveSec = t1.sec + leg1Transit * 60;
+        const arrTrip = transferStop?.byTripId?.[t1.trip_id];
+        const arriveSec = arrTrip ? parseTime(arrTrip.arrival_time) : null;
+        if (arriveSec == null) continue;
         const earliestBoardSec = arriveSec + TRANSFER_BUFFER * 60;
-        const match = leg2Data.trips.find(t2 => t2.sec >= earliestBoardSec);
+        const match = leg2Data.trips.find(t2 => t2.depSec >= earliestBoardSec);
         if (match) {
-          const waitMins = Math.round((match.sec - arriveSec) / 60);
-          const finalSec = match.sec + leg2.transit * 60;
           pairs.push({
             t1, t2: match,
             transferArriveTime: secToHHMM(arriveSec),
-            finalArriveTime: secToHHMM(finalSec),
-            finalLabel: leg2.arriveLabel,
-            waitMins
+            finalArriveTime: match.arrSec != null ? secToHHMM(match.arrSec) : null,
+            finalLabel: STOP_LABEL[leg2.to] || leg2.to,
+            waitMins: Math.round((match.depSec - arriveSec) / 60)
           });
         }
         if (pairs.length >= 3) break;
       }
+
       const html = [`<h2 class="chain-title">${escapeHtml(chainCfg.title)}</h2>`];
       if (pairs.length === 0) {
         html.push(`<div class="empty">No matched chain in next 2 hours</div>`);
@@ -201,11 +217,12 @@
         for (const p of pairs) {
           const label = p.t1.mins <= 0 ? 'now' : `${p.t1.mins} min`;
           const cls = p.t1.mins <= 1 ? 'now' : (p.t1.mins <= 4 ? 'soon' : '');
+          const finalStr = p.finalArriveTime ? ` → arrive ${escapeHtml(p.finalLabel)} ${escapeHtml(p.finalArriveTime)}` : '';
           html.push(`<div class="chain">
             <span class="mins ${cls}">${escapeHtml(label)}</span>
             <div class="chain-detail">
-              <div class="main">Catch ${escapeHtml(p.t1.departure_time.slice(0,5))} → arrive Waitematā ~${escapeHtml(p.transferArriveTime)}</div>
-              <div class="sub">Board ${escapeHtml(p.t2.departure_time.slice(0,5))} — ${p.waitMins} min transfer → arrive ${escapeHtml(p.finalLabel)} ~${escapeHtml(p.finalArriveTime)}</div>
+              <div class="main">Catch ${escapeHtml(p.t1.departure_time.slice(0,5))} → arrive ${escapeHtml(transferLabel)} ${escapeHtml(p.transferArriveTime)}</div>
+              <div class="sub">Board ${escapeHtml(p.t2.departure_time.slice(0,5))} — ${p.waitMins} min transfer${finalStr}</div>
             </div>
           </div>`);
         }
@@ -221,19 +238,21 @@
       const p = nzDateParts();
       const nowSec = parseInt(p.hour, 10) * 3600 + parseInt(p.minute, 10) * 60;
 
+      // Fetch each unique stop once (parallel)
+      const stopKeys = Object.keys(STOPS);
+      const stopResults = await Promise.all(stopKeys.map(k => fetchStop(STOPS[k])));
+      const stopData = {};
+      stopKeys.forEach((k, i) => { stopData[k] = stopResults[i]; });
+
+      // Compute filtered trips per leg (join origin departures with destination arrivals)
       const legData = {};
-      const uniqueLegs = new Set();
-      for (const g of GROUPS) {
-        for (const id of g.legs) uniqueLegs.add(id);
-        if (g.chain) { uniqueLegs.add(g.chain.leg1); uniqueLegs.add(g.chain.leg2); }
-      }
-      for (const id of uniqueLegs) legData[id] = await getLegTrips(LEGS[id], nowSec);
+      for (const id of Object.keys(LEGS)) legData[id] = buildLegTrips(id, stopData, nowSec);
 
       const parts = [];
       for (const g of GROUPS) {
         parts.push(`<div class="group"><div class="group-title">${escapeHtml(g.label)}</div>`);
         for (const id of g.legs) parts.push(renderLegSection(LEGS[id], legData[id]));
-        if (g.chain) parts.push(renderChainSection(g.chain, LEGS[g.chain.leg1], LEGS[g.chain.leg2], legData[g.chain.leg1], legData[g.chain.leg2]));
+        if (g.chain) parts.push(renderChainSection(g.chain, stopData, legData));
         parts.push('</div>');
       }
       out.innerHTML = parts.join('');
