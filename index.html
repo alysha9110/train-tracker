@@ -29,18 +29,14 @@
     const KEY = '__AT_API_KEY__';
     const BASE = 'https://api.at.govt.nz/gtfs/v3';
 
-    const ROUTES = [
-      {
-        title: 'Newmarket → Swanson (to work)',
-        stop_ids: ['31417-5e63d0dc'],
-        wantHeadsign: ['swanson']
-      },
-      {
-        title: 'Avondale → Waitematā (home)',
-        stop_ids: ['11144-451b6a8e', '11796-451b6a8e'],
-        wantHeadsign: ['waitemat', 'britomart']
-      }
-    ];
+    const ROUTES = [];
+const SEARCH_NAMES = [
+  'Newmarket Train Station',
+  'Avondale Train Station',
+  'Mount Albert Train Station',
+  'Newmarket',
+  'Avondale'
+];
 
     async function api(path) {
       try {
@@ -149,12 +145,25 @@
       return html.join('');
     }
 
-    async function run() {
+        async function run() {
       document.getElementById('time').textContent = 'Updated ' + new Date().toLocaleTimeString('en-NZ', { timeZone: 'Pacific/Auckland' });
       const out = document.getElementById('out');
       out.innerHTML = '<p class="muted">Loading…</p>';
       const parts = [];
-      for (const r of ROUTES) parts.push(await renderRoute(r));
+      for (const name of SEARCH_NAMES) {
+        const res = await api(`/stops?filter[stop_name]=${encodeURIComponent(name)}`);
+        parts.push(`<h2>${escapeHtml(name)}</h2>`);
+        if (!res.ok) {
+          parts.push(`<div class="err">HTTP ${res.status}\n${escapeHtml(JSON.stringify(res.body).slice(0, 500))}</div>`);
+        } else {
+          const stops = res.body.data || [];
+          parts.push(`<p class="muted">Found ${stops.length} stops</p>`);
+          for (const s of stops) {
+            const a = s.attributes || {};
+            parts.push(`<div class="train"><span class="meta"><b>${escapeHtml(a.stop_name || '?')}</b><br>stop_id: <code>${escapeHtml(a.stop_id || s.id)}</code><br>lat/lon: ${a.stop_lat}, ${a.stop_lon}</span></div>`);
+          }
+        }
+      }
       out.innerHTML = parts.join('');
     }
 
