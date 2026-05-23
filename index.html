@@ -110,4 +110,55 @@
       for (const sid of route.stop_ids) {
         const res = await fetchTrips(sid);
         if (!res.ok) {
-          errors.push(`stop ${sid}: HTTP ${res.status}\n
+          errors.push(`stop ${sid}: HTTP ${res.status}\n${JSON.stringify(res.body).slice(0, 800)}`);
+          continue;
+        }
+        raws.push({ stop: sid, body: res.body });
+        for (const t of (res.body.data || [])) allTrips.push(extractDeparture(t));
+      }
+
+      const want = route.wantHeadsign;
+      let filtered = allTrips.filter(t => {
+        const h = (t.trip_headsign || '').toLowerCase();
+        return want.some(w => h.includes(w));
+      });
+
+      const showAll = filtered.length === 0 && allTrips.length > 0;
+      if (showAll) filtered = allTrips;
+
+      filtered = filtered.map(t => {
+        const tsec = parseTime(t.departure_time);
+        const mins = tsec == null ? null : Math.round((tsec - nowSec) / 60);
+        return { ...t, mins };
+      }).filter(t => t.mins != null && t.mins >= -1).sort((a,b) => a.mins - b.mins);
+
+      const html = [`<h2>${escapeHtml(route.title)}</h2>`];
+      if (errors.length) html.push(`<div class="err">${escapeHtml(errors.join('\n\n'))}</div>`);
+      if (showAll && filtered.length) html.push(`<p class="muted">No headsign matched — showing all directions so we can see what's available:</p>`);
+      if (filtered.length === 0 && !errors.length) {
+        html.push(`<div class="empty">No upcoming trips returned by API</div>`);
+      } else {
+        for (const t of filtered.slice(0, 4)) {
+          const label = t.mins <= 0 ? 'now' : `${t.mins} min`;
+          const cls = t.mins <= 1 ? 'now' : (t.mins <= 4 ? 'soon' : '');
+          const time = (t.departure_time || '').slice(0, 5);
+          html.push(`<div class="train"><span class="mins ${cls}">${escapeHtml(label)}</span><span class="meta">${escapeHtml(time)}<br>${escapeHtml(t.trip_headsign || '?')}</span></div>`);
+        }
+      }
+      html.push(`<details><summary class="muted">Debug · raw API responses</summary><div class="raw">${escapeHtml(JSON.stringify(raws, null, 2))}</div></details>`);
+      return html.join('');
+    }
+
+    async function run() {
+      document.getElementById('time').textContent = 'Updated ' + new Date().toLocaleTimeString('en-NZ', { timeZone: 'Pacific/Auckland' });
+      const out = document.getElementById('out');
+      out.innerHTML = '<p class="muted">Loading…</p>';
+      const parts = [];
+      for (const r of ROUTES) parts.push(await renderRoute(r));
+      out.innerHTML = parts.join('');
+    }
+
+    run();
+  </script>
+</body>
+</html>
