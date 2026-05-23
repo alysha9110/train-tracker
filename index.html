@@ -10,14 +10,20 @@
     .group { margin-top: 1.5em; padding-top: 0.5em; border-top: 2px solid #333; }
     .group-title { font-weight: bold; text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.85em; color: #333; }
     h2 { font-size: 1em; margin: 1em 0 0.3em; border-bottom: 1px solid #ddd; padding-bottom: 0.2em; }
+    h2.chain-title { color: #036; border-bottom-color: #036; }
     .train { display: flex; justify-content: space-between; padding: 0.5em 0.4em; border-bottom: 1px solid #eee; align-items: baseline; }
     .train:last-child { border-bottom: none; }
     .train .mins { font-size: 1.3em; font-weight: bold; }
-    .train .mins.now { color: #c00; }
-    .train .mins.soon { color: #e80; }
+    .train .mins.now, .chain .mins.now { color: #c00; }
+    .train .mins.soon, .chain .mins.soon { color: #e80; }
     .train .meta { color: #666; font-size: 0.85em; text-align: right; }
+    .chain { display: flex; gap: 0.7em; padding: 0.7em 0.5em; border-bottom: 1px solid #ddf; align-items: flex-start; background: #f4f8ff; }
+    .chain:last-child { border-bottom: none; }
+    .chain .mins { font-size: 1.3em; font-weight: bold; min-width: 4.5em; }
+    .chain-detail { flex: 1; font-size: 0.9em; }
+    .chain-detail .main { font-weight: 500; }
+    .chain-detail .sub { color: #555; font-size: 0.88em; margin-top: 0.1em; }
     .err { color: #b00; white-space: pre-wrap; font-family: monospace; font-size: 0.8em; background: #fee; padding: 0.5em; border-radius: 4px; }
-    .raw { font-family: monospace; font-size: 0.7em; white-space: pre-wrap; background: #f4f4f4; padding: 0.5em; overflow: auto; max-height: 300px; }
     button { padding: 0.6em 1.4em; font-size: 1em; }
     .muted { color: #888; font-size: 0.85em; }
     .empty { color: #888; font-style: italic; padding: 0.5em 0.4em; }
@@ -31,34 +37,41 @@
     const KEY = '__AT_API_KEY__';
     const BASE = 'https://api.at.govt.nz/gtfs/v3';
 
-    // Direction patterns: destination prefixes (after " To " in headsign)
     const WEST = ['new lynn', 'henderson', 'swanson', 'ranui', 'sturges', 'fruitvale', 'glen eden', 'sunnyvale'];
     const CITY = ['brit', 'waitemat'];
     const EAST = ['manukau', 'panmure', 'glen innes', 'meadowbank', 'sylvia', 'otahuhu'];
 
+    // Transit estimates (min). Adjust if real-world deviates.
+    const TRANSIT = {
+      orakei_to_waitemata: 10,
+      avondale_to_waitemata: 22
+    };
+    const TRANSFER_BUFFER = 3; // min between arrival and earliest catchable departure
+
+    const LEGS = {
+      newmarket_avondale: { title: 'Newmarket → Avondale', stop_ids: ['115-96c3c7be'], wantDest: WEST },
+      orakei_waitemata:   { title: 'Orakei → Waitematā',   stop_ids: ['116-214837ca'], wantDest: CITY },
+      waitemata_avondale: { title: 'Waitematā → Avondale (leg 2)', stop_ids: ['133-08da14b5'], wantDest: WEST },
+      avondale_city:      { title: 'Avondale → city',      stop_ids: ['105-474861ff'], wantDest: CITY },
+      waitemata_orakei:   { title: 'Waitematā → Orakei (leg 2)', stop_ids: ['133-08da14b5'], wantDest: EAST }
+    };
+
     const GROUPS = [
       {
         label: 'To work',
-        routes: [
-          { title: 'Newmarket → Avondale', stop_ids: ['115-96c3c7be'], wantDest: WEST },
-          { title: 'Orakei → Waitematā (leg 1)', stop_ids: ['116-214837ca'], wantDest: CITY },
-          { title: 'Waitematā → Avondale (leg 2)', stop_ids: ['133-08da14b5'], wantDest: WEST }
-        ]
+        legs: ['newmarket_avondale', 'orakei_waitemata', 'waitemata_avondale'],
+        chain: { title: 'Orakei route — matched chain', leg1: 'orakei_waitemata', leg2: 'waitemata_avondale', transit: TRANSIT.orakei_to_waitemata, arriveLabel: 'Waitematā' }
       },
       {
         label: 'To home',
-        routes: [
-          { title: 'Avondale → city', stop_ids: ['105-474861ff'], wantDest: CITY },
-          { title: 'Waitematā → Orakei (leg 2)', stop_ids: ['133-08da14b5'], wantDest: EAST }
-        ]
+        legs: ['avondale_city', 'waitemata_orakei'],
+        chain: { title: 'Orakei route — matched chain', leg1: 'avondale_city', leg2: 'waitemata_orakei', transit: TRANSIT.avondale_to_waitemata, arriveLabel: 'Waitematā' }
       }
     ];
 
     async function api(path) {
       try {
-        const r = await fetch(BASE + path, {
-          headers: { 'Ocp-Apim-Subscription-Key': KEY }
-        });
+        const r = await fetch(BASE + path, { headers: { 'Ocp-Apim-Subscription-Key': KEY } });
         const text = await r.text();
         let body;
         try { body = JSON.parse(text); } catch { body = text; }
@@ -79,9 +92,7 @@
         hour: '2-digit', minute: '2-digit', hour12: false
       });
       const parts = {};
-      for (const p of fmt.formatToParts(new Date())) {
-        if (p.type !== 'literal') parts[p.type] = p.value;
-      }
+      for (const p of fmt.formatToParts(new Date())) if (p.type !== 'literal') parts[p.type] = p.value;
       return parts;
     }
 
@@ -90,6 +101,13 @@
       const m = String(s).match(/^(\d{1,2}):(\d{2}):(\d{2})/);
       if (!m) return null;
       return (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]);
+    }
+
+    function secToHHMM(sec) {
+      sec = ((sec % 86400) + 86400) % 86400;
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
     }
 
     function getDestination(headsign) {
@@ -127,40 +145,67 @@
       };
     }
 
-    async function renderRoute(route, nowSec) {
-      const allTrips = [];
+    async function getLegTrips(leg, nowSec) {
+      const trips = [];
       const errors = [];
-
-      for (const sid of route.stop_ids) {
+      for (const sid of leg.stop_ids) {
         const res = await fetchTrips(sid);
         if (!res.ok) {
-          errors.push(`stop ${sid}: HTTP ${res.status}\n${JSON.stringify(res.body).slice(0, 400)}`);
+          errors.push(`stop ${sid}: HTTP ${res.status}`);
           continue;
         }
-        for (const t of (res.body.data || [])) allTrips.push(extractDeparture(t));
+        for (const t of (res.body.data || [])) trips.push(extractDeparture(t));
       }
-
-      let filtered = allTrips.filter(t => matchesDirection(t.trip_headsign, route.wantDest));
-      const showAll = filtered.length === 0 && allTrips.length > 0;
-      if (showAll) filtered = allTrips;
-
+      let filtered = trips.filter(t => matchesDirection(t.trip_headsign, leg.wantDest));
       filtered = filtered.map(t => {
         const tsec = parseTime(t.departure_time);
-        const mins = tsec == null ? null : Math.round((tsec - nowSec) / 60);
-        return { ...t, mins };
-      }).filter(t => t.mins != null && t.mins >= -1).sort((a,b) => a.mins - b.mins);
+        return { ...t, sec: tsec, mins: tsec == null ? null : Math.round((tsec - nowSec) / 60) };
+      }).filter(t => t.sec != null && t.mins >= -1).sort((a,b) => a.sec - b.sec);
+      return { trips: filtered, errors };
+    }
 
-      const html = [`<h2>${escapeHtml(route.title)}</h2>`];
-      if (errors.length) html.push(`<div class="err">${escapeHtml(errors.join('\n\n'))}</div>`);
-      if (showAll && filtered.length) html.push(`<p class="muted">No direction match — showing all trips:</p>`);
-      if (filtered.length === 0 && !errors.length) {
-        html.push(`<div class="empty">No upcoming trains in the next 2 hours</div>`);
+    function renderLegSection(title, data) {
+      const html = [`<h2>${escapeHtml(title)}</h2>`];
+      if (data.errors.length) html.push(`<div class="err">${escapeHtml(data.errors.join('\n'))}</div>`);
+      if (data.trips.length === 0 && !data.errors.length) {
+        html.push(`<div class="empty">No upcoming trains</div>`);
       } else {
-        for (const t of filtered.slice(0, 3)) {
+        for (const t of data.trips.slice(0, 3)) {
           const label = t.mins <= 0 ? 'now' : `${t.mins} min`;
           const cls = t.mins <= 1 ? 'now' : (t.mins <= 4 ? 'soon' : '');
           const time = (t.departure_time || '').slice(0, 5);
           html.push(`<div class="train"><span class="mins ${cls}">${escapeHtml(label)}</span><span class="meta">${escapeHtml(time)}<br>${escapeHtml(cleanHeadsign(t.trip_headsign))}</span></div>`);
+        }
+      }
+      return html.join('');
+    }
+
+    function renderChainSection(chainCfg, leg1Data, leg2Data) {
+      const pairs = [];
+      for (const t1 of leg1Data.trips) {
+        const arriveSec = t1.sec + chainCfg.transit * 60;
+        const earliestBoardSec = arriveSec + TRANSFER_BUFFER * 60;
+        const match = leg2Data.trips.find(t2 => t2.sec >= earliestBoardSec);
+        if (match) {
+          const waitMins = Math.round((match.sec - arriveSec) / 60);
+          pairs.push({ t1, t2: match, arriveTime: secToHHMM(arriveSec), waitMins });
+        }
+        if (pairs.length >= 3) break;
+      }
+      const html = [`<h2 class="chain-title">${escapeHtml(chainCfg.title)}</h2>`];
+      if (pairs.length === 0) {
+        html.push(`<div class="empty">No matched chain in next 2 hours</div>`);
+      } else {
+        for (const p of pairs) {
+          const label = p.t1.mins <= 0 ? 'now' : `${p.t1.mins} min`;
+          const cls = p.t1.mins <= 1 ? 'now' : (p.t1.mins <= 4 ? 'soon' : '');
+          html.push(`<div class="chain">
+            <span class="mins ${cls}">${escapeHtml(label)}</span>
+            <div class="chain-detail">
+              <div class="main">Catch ${escapeHtml(p.t1.departure_time.slice(0,5))} → arrive ${escapeHtml(chainCfg.arriveLabel)} ~${escapeHtml(p.arriveTime)}</div>
+              <div class="sub">Board ${escapeHtml(p.t2.departure_time.slice(0,5))} — ${p.waitMins} min transfer</div>
+            </div>
+          </div>`);
         }
       }
       return html.join('');
@@ -174,10 +219,22 @@
       const p = nzDateParts();
       const nowSec = parseInt(p.hour, 10) * 3600 + parseInt(p.minute, 10) * 60;
 
+      // Fetch each unique leg once
+      const legData = {};
+      const uniqueLegs = new Set();
+      for (const g of GROUPS) {
+        for (const id of g.legs) uniqueLegs.add(id);
+        if (g.chain) { uniqueLegs.add(g.chain.leg1); uniqueLegs.add(g.chain.leg2); }
+      }
+      for (const id of uniqueLegs) {
+        legData[id] = await getLegTrips(LEGS[id], nowSec);
+      }
+
       const parts = [];
       for (const g of GROUPS) {
         parts.push(`<div class="group"><div class="group-title">${escapeHtml(g.label)}</div>`);
-        for (const r of g.routes) parts.push(await renderRoute(r, nowSec));
+        for (const id of g.legs) parts.push(renderLegSection(LEGS[id].title, legData[id]));
+        if (g.chain) parts.push(renderChainSection(g.chain, legData[g.chain.leg1], legData[g.chain.leg2]));
         parts.push('</div>');
       }
       out.innerHTML = parts.join('');
