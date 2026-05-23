@@ -22,11 +22,6 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - name: Inject API key
-        env:
-          AT_API_KEY: ${{ secrets.AT_API_KEY }}
-        run: |
-          python3 -c "import os, pathlib; p=pathlib.Path('index.html'); p.write_text(p.read_text().replace('__AT_API_KEY__', os.environ['AT_API_KEY']))"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
