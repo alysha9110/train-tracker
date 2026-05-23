@@ -35,7 +35,6 @@
   <p><button onclick="run()">Refresh</button> <span class="muted" id="time"></span></p>
   <div id="out"><p class="muted">Loading…</p></div>
   <script>
-    const KEY = '__AT_API_KEY__';
     const BASE = 'https://train-api.aly-chua91.workers.dev/gtfs/v3';
 
     const WEST = ['new lynn', 'henderson', 'swanson', 'ranui', 'sturges', 'fruitvale', 'glen eden', 'sunnyvale'];
@@ -67,7 +66,7 @@
 
     async function api(path) {
       try {
-        const r = await fetch(BASE + path, { headers: { 'Ocp-Apim-Subscription-Key': KEY } });
+        const r = await fetch(BASE + path);
         const text = await r.text();
         let body;
         try { body = JSON.parse(text); } catch { body = text; }
