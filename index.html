@@ -7,10 +7,12 @@
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; padding: 1em; max-width: 640px; margin: 0 auto; line-height: 1.4; }
     h1 { font-size: 1.3em; margin: 0 0 0.5em; }
-    h2 { font-size: 1.05em; margin: 1.3em 0 0.4em; border-bottom: 1px solid #ddd; padding-bottom: 0.2em; }
-    .train { display: flex; justify-content: space-between; padding: 0.6em 0.4em; border-bottom: 1px solid #eee; align-items: baseline; }
+    .group { margin-top: 1.5em; padding-top: 0.5em; border-top: 2px solid #333; }
+    .group-title { font-weight: bold; text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.85em; color: #333; }
+    h2 { font-size: 1em; margin: 1em 0 0.3em; border-bottom: 1px solid #ddd; padding-bottom: 0.2em; }
+    .train { display: flex; justify-content: space-between; padding: 0.5em 0.4em; border-bottom: 1px solid #eee; align-items: baseline; }
     .train:last-child { border-bottom: none; }
-    .train .mins { font-size: 1.4em; font-weight: bold; }
+    .train .mins { font-size: 1.3em; font-weight: bold; }
     .train .mins.now { color: #c00; }
     .train .mins.soon { color: #e80; }
     .train .meta { color: #666; font-size: 0.85em; text-align: right; }
@@ -18,7 +20,7 @@
     .raw { font-family: monospace; font-size: 0.7em; white-space: pre-wrap; background: #f4f4f4; padding: 0.5em; overflow: auto; max-height: 300px; }
     button { padding: 0.6em 1.4em; font-size: 1em; }
     .muted { color: #888; font-size: 0.85em; }
-    .empty { color: #888; font-style: italic; padding: 0.6em 0.4em; }
+    .empty { color: #888; font-style: italic; padding: 0.5em 0.4em; }
   </style>
 </head>
 <body>
@@ -29,17 +31,26 @@
     const KEY = '__AT_API_KEY__';
     const BASE = 'https://api.at.govt.nz/gtfs/v3';
 
-    // Destination prefixes (matched after " To " in headsign)
-    const ROUTES = [
+    // Direction patterns: destination prefixes (after " To " in headsign)
+    const WEST = ['new lynn', 'henderson', 'swanson', 'ranui', 'sturges', 'fruitvale', 'glen eden', 'sunnyvale'];
+    const CITY = ['brit', 'waitemat'];
+    const EAST = ['manukau', 'panmure', 'glen innes', 'meadowbank', 'sylvia', 'otahuhu'];
+
+    const GROUPS = [
       {
-        title: 'Newmarket → Avondale (to work)',
-        stop_ids: ['115-96c3c7be'],
-        wantDest: ['new lynn', 'henderson', 'swanson', 'ranui', 'sturges', 'fruitvale', 'glen eden', 'sunnyvale']
+        label: 'To work',
+        routes: [
+          { title: 'Newmarket → Avondale', stop_ids: ['115-96c3c7be'], wantDest: WEST },
+          { title: 'Orakei → Waitematā (leg 1)', stop_ids: ['116-214837ca'], wantDest: CITY },
+          { title: 'Waitematā → Avondale (leg 2)', stop_ids: ['133-08da14b5'], wantDest: WEST }
+        ]
       },
       {
-        title: 'Avondale → Newmarket (home)',
-        stop_ids: ['105-474861ff'],
-        wantDest: ['brit', 'waitemat']
+        label: 'To home',
+        routes: [
+          { title: 'Avondale → city', stop_ids: ['105-474861ff'], wantDest: CITY },
+          { title: 'Waitematā → Orakei (leg 2)', stop_ids: ['133-08da14b5'], wantDest: EAST }
+        ]
       }
     ];
 
@@ -81,7 +92,6 @@
       return (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]);
     }
 
-    // Extract destination from "ORIGIN To DESTINATION Via WAYPOINT" headsigns.
     function getDestination(headsign) {
       const h = (headsign || '').toLowerCase();
       const idx = h.indexOf(' to ');
@@ -93,12 +103,10 @@
       return wantPatterns.some(p => dest.startsWith(p));
     }
 
-    // Strip the platform numbers from the headsign for display (e.g. "Brit 2 To New Lynn 2 Via Newmarket 1" → "Brit → New Lynn via Newmarket")
     function cleanHeadsign(headsign) {
       return (headsign || '')
-        .replace(/\s\d+\b/g, '')        // strip " 2", " 4", etc.
+        .replace(/\s\d+\b/g, '')
         .replace(/\bTo\b/g, '→')
-        .replace(/\bBrit\b/gi, 'Brit')
         .replace(/\bVia\b/g, 'via')
         .trim();
     }
@@ -115,26 +123,20 @@
       const a = item.attributes || item;
       return {
         departure_time: a.departure_time || a.arrival_time || a.scheduled_departure_time,
-        trip_headsign: a.trip_headsign || a.headsign || '',
-        route_short_name: a.route_short_name || ''
+        trip_headsign: a.trip_headsign || a.headsign || ''
       };
     }
 
-    async function renderRoute(route) {
-      const p = nzDateParts();
-      const nowSec = parseInt(p.hour, 10) * 3600 + parseInt(p.minute, 10) * 60;
-
+    async function renderRoute(route, nowSec) {
       const allTrips = [];
       const errors = [];
-      const raws = [];
 
       for (const sid of route.stop_ids) {
         const res = await fetchTrips(sid);
         if (!res.ok) {
-          errors.push(`stop ${sid}: HTTP ${res.status}\n${JSON.stringify(res.body).slice(0, 800)}`);
+          errors.push(`stop ${sid}: HTTP ${res.status}\n${JSON.stringify(res.body).slice(0, 400)}`);
           continue;
         }
-        raws.push({ stop: sid, body: res.body });
         for (const t of (res.body.data || [])) allTrips.push(extractDeparture(t));
       }
 
@@ -150,18 +152,17 @@
 
       const html = [`<h2>${escapeHtml(route.title)}</h2>`];
       if (errors.length) html.push(`<div class="err">${escapeHtml(errors.join('\n\n'))}</div>`);
-      if (showAll && filtered.length) html.push(`<p class="muted">No trains matched direction filter — showing all trips:</p>`);
+      if (showAll && filtered.length) html.push(`<p class="muted">No direction match — showing all trips:</p>`);
       if (filtered.length === 0 && !errors.length) {
         html.push(`<div class="empty">No upcoming trains in the next 2 hours</div>`);
       } else {
-        for (const t of filtered.slice(0, 4)) {
+        for (const t of filtered.slice(0, 3)) {
           const label = t.mins <= 0 ? 'now' : `${t.mins} min`;
           const cls = t.mins <= 1 ? 'now' : (t.mins <= 4 ? 'soon' : '');
           const time = (t.departure_time || '').slice(0, 5);
           html.push(`<div class="train"><span class="mins ${cls}">${escapeHtml(label)}</span><span class="meta">${escapeHtml(time)}<br>${escapeHtml(cleanHeadsign(t.trip_headsign))}</span></div>`);
         }
       }
-      html.push(`<details><summary class="muted">Debug</summary><div class="raw">${escapeHtml(JSON.stringify(raws, null, 2))}</div></details>`);
       return html.join('');
     }
 
@@ -169,8 +170,16 @@
       document.getElementById('time').textContent = 'Updated ' + new Date().toLocaleTimeString('en-NZ', { timeZone: 'Pacific/Auckland' });
       const out = document.getElementById('out');
       out.innerHTML = '<p class="muted">Loading…</p>';
+
+      const p = nzDateParts();
+      const nowSec = parseInt(p.hour, 10) * 3600 + parseInt(p.minute, 10) * 60;
+
       const parts = [];
-      for (const r of ROUTES) parts.push(await renderRoute(r));
+      for (const g of GROUPS) {
+        parts.push(`<div class="group"><div class="group-title">${escapeHtml(g.label)}</div>`);
+        for (const r of g.routes) parts.push(await renderRoute(r, nowSec));
+        parts.push('</div>');
+      }
       out.innerHTML = parts.join('');
     }
 
