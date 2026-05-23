@@ -3,26 +3,44 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Train</title>
+  <title>Trains</title>
   <style>
-    body { font-family: system-ui, sans-serif; padding: 1em; max-width: 640px; margin: 0 auto; line-height: 1.4; }
-    h1 { font-size: 1.2em; }
-    h2 { margin-top: 1.2em; font-size: 1.05em; border-bottom: 1px solid #ddd; padding-bottom: 0.2em; }
-    .stop { border: 1px solid #ccc; padding: 0.5em; margin: 0.4em 0; border-radius: 4px; }
-    .err { color: #b00; white-space: pre-wrap; font-family: monospace; font-size: 0.85em; background: #fee; padding: 0.5em; border-radius: 4px; }
-    .raw { font-family: monospace; font-size: 0.75em; white-space: pre-wrap; background: #f4f4f4; padding: 0.5em; overflow-x: auto; max-height: 300px; overflow-y: auto; }
-    button { padding: 0.6em 1.2em; font-size: 1em; }
-    code { background: #eef; padding: 0 0.3em; }
-    .muted { color: #666; font-size: 0.85em; }
+    body { font-family: system-ui, -apple-system, sans-serif; padding: 1em; max-width: 640px; margin: 0 auto; line-height: 1.4; }
+    h1 { font-size: 1.3em; margin: 0 0 0.5em; }
+    h2 { font-size: 1.05em; margin: 1.3em 0 0.4em; border-bottom: 1px solid #ddd; padding-bottom: 0.2em; }
+    .train { display: flex; justify-content: space-between; padding: 0.6em 0.4em; border-bottom: 1px solid #eee; align-items: baseline; }
+    .train:last-child { border-bottom: none; }
+    .train .mins { font-size: 1.4em; font-weight: bold; }
+    .train .mins.now { color: #c00; }
+    .train .mins.soon { color: #e80; }
+    .train .meta { color: #666; font-size: 0.85em; text-align: right; }
+    .err { color: #b00; white-space: pre-wrap; font-family: monospace; font-size: 0.8em; background: #fee; padding: 0.5em; border-radius: 4px; }
+    .raw { font-family: monospace; font-size: 0.7em; white-space: pre-wrap; background: #f4f4f4; padding: 0.5em; overflow: auto; max-height: 300px; }
+    button { padding: 0.6em 1.4em; font-size: 1em; }
+    .muted { color: #888; font-size: 0.85em; }
+    .empty { color: #888; font-style: italic; padding: 0.6em 0.4em; }
   </style>
 </head>
 <body>
-  <h1>Train Tracker — Discovery</h1>
+  <h1>Trains</h1>
   <p><button onclick="run()">Refresh</button> <span class="muted" id="time"></span></p>
   <div id="out"><p class="muted">Loading…</p></div>
   <script>
     const KEY = '__AT_API_KEY__';
     const BASE = 'https://api.at.govt.nz/gtfs/v3';
+
+    const ROUTES = [
+      {
+        title: 'Newmarket → Swanson (to work)',
+        stop_ids: ['31417-5e63d0dc'],
+        wantHeadsign: ['swanson']
+      },
+      {
+        title: 'Avondale → Waitematā (home)',
+        stop_ids: ['11144-451b6a8e', '11796-451b6a8e'],
+        wantHeadsign: ['waitemat', 'britomart']
+      }
+    ];
 
     async function api(path) {
       try {
@@ -42,34 +60,54 @@
       return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
     }
 
-    async function run() {
-      const out = document.getElementById('out');
-      out.innerHTML = '<p class="muted">Loading…</p>';
-      document.getElementById('time').textContent = 'Updated ' + new Date().toLocaleTimeString();
-
-      const html = [];
-
-      for (const name of ['Newmarket', 'Avondale']) {
-        html.push(`<section><h2>${name}</h2>`);
-        const res = await api(`/stops?filter[stop_name]=${encodeURIComponent(name)}`);
-        if (!res.ok) {
-          html.push(`<div class="err">HTTP ${res.status}\n${escapeHtml(JSON.stringify(res.body, null, 2))}</div>`);
-        } else {
-          const stops = res.body.data || [];
-          html.push(`<p class="muted">Found ${stops.length} stops</p>`);
-          for (const s of stops) {
-            const a = s.attributes || {};
-            html.push(`<div class="stop"><b>${escapeHtml(a.stop_name || '?')}</b><br>stop_id: <code>${escapeHtml(a.stop_id || s.id)}</code><br><span class="muted">lat/lon: ${a.stop_lat}, ${a.stop_lon}</span></div>`);
-          }
-          html.push(`<details><summary class="muted">Raw response</summary><div class="raw">${escapeHtml(JSON.stringify(res.body, null, 2))}</div></details>`);
-        }
-        html.push('</section>');
+    function nzDateParts() {
+      const fmt = new Intl.DateTimeFormat('en-NZ', {
+        timeZone: 'Pacific/Auckland',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', hour12: false
+      });
+      const parts = {};
+      for (const p of fmt.formatToParts(new Date())) {
+        if (p.type !== 'literal') parts[p.type] = p.value;
       }
-
-      out.innerHTML = html.join('');
+      return parts;
     }
 
-    run();
-  </script>
-</body>
-</html>
+    function parseTime(s) {
+      if (!s) return null;
+      const m = String(s).match(/^(\d{1,2}):(\d{2}):(\d{2})/);
+      if (!m) return null;
+      return (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]);
+    }
+
+    async function fetchTrips(stop_id) {
+      const p = nzDateParts();
+      const date = `${p.year}-${p.month}-${p.day}`;
+      const hour = parseInt(p.hour, 10);
+      const qs = `filter[date]=${date}&filter[start_hour]=${hour}&filter[hour_range]=2`;
+      return api(`/stops/${encodeURIComponent(stop_id)}/stoptrips?${qs}`);
+    }
+
+    function extractDeparture(item) {
+      const a = item.attributes || item;
+      return {
+        departure_time: a.departure_time || a.arrival_time || a.scheduled_departure_time,
+        trip_headsign: a.trip_headsign || a.headsign || '',
+        route_short_name: a.route_short_name || '',
+        stop_id: a.stop_id,
+        raw: a
+      };
+    }
+
+    async function renderRoute(route) {
+      const p = nzDateParts();
+      const nowSec = parseInt(p.hour, 10) * 3600 + parseInt(p.minute, 10) * 60;
+
+      const allTrips = [];
+      const errors = [];
+      const raws = [];
+
+      for (const sid of route.stop_ids) {
+        const res = await fetchTrips(sid);
+        if (!res.ok) {
+          errors.push(`stop ${sid}: HTTP ${res.status}\n
