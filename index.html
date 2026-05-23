@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Train</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 1em; max-width: 640px; margin: 0 auto; line-height: 1.4; }
+    h1 { font-size: 1.2em; }
+    h2 { margin-top: 1.2em; font-size: 1.05em; border-bottom: 1px solid #ddd; padding-bottom: 0.2em; }
+    .stop { border: 1px solid #ccc; padding: 0.5em; margin: 0.4em 0; border-radius: 4px; }
+    .err { color: #b00; white-space: pre-wrap; font-family: monospace; font-size: 0.85em; background: #fee; padding: 0.5em; border-radius: 4px; }
+    .raw { font-family: monospace; font-size: 0.75em; white-space: pre-wrap; background: #f4f4f4; padding: 0.5em; overflow-x: auto; max-height: 300px; overflow-y: auto; }
+    button { padding: 0.6em 1.2em; font-size: 1em; }
+    code { background: #eef; padding: 0 0.3em; }
+    .muted { color: #666; font-size: 0.85em; }
+  </style>
+</head>
+<body>
+  <h1>Train Tracker — Discovery</h1>
+  <p><button onclick="run()">Refresh</button> <span class="muted" id="time"></span></p>
+  <div id="out"><p class="muted">Loading…</p></div>
+  <script>
+    const KEY = '__AT_API_KEY__';
+    const BASE = 'https://api.at.govt.nz/gtfs/v3';
+
+    async function api(path) {
+      try {
+        const r = await fetch(BASE + path, {
+          headers: { 'Ocp-Apim-Subscription-Key': KEY }
+        });
+        const text = await r.text();
+        let body;
+        try { body = JSON.parse(text); } catch { body = text; }
+        return { ok: r.ok, status: r.status, body };
+      } catch (e) {
+        return { ok: false, status: 0, body: 'Network error: ' + e.message };
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+    }
+
+    async function run() {
+      const out = document.getElementById('out');
+      out.innerHTML = '<p class="muted">Loading…</p>';
+      document.getElementById('time').textContent = 'Updated ' + new Date().toLocaleTimeString();
+
+      const html = [];
+
+      for (const name of ['Newmarket', 'Avondale']) {
+        html.push(`<section><h2>${name}</h2>`);
+        const res = await api(`/stops?filter[stop_name]=${encodeURIComponent(name)}`);
+        if (!res.ok) {
+          html.push(`<div class="err">HTTP ${res.status}\n${escapeHtml(JSON.stringify(res.body, null, 2))}</div>`);
+        } else {
+          const stops = res.body.data || [];
+          html.push(`<p class="muted">Found ${stops.length} stops</p>`);
+          for (const s of stops) {
+            const a = s.attributes || {};
+            html.push(`<div class="stop"><b>${escapeHtml(a.stop_name || '?')}</b><br>stop_id: <code>${escapeHtml(a.stop_id || s.id)}</code><br><span class="muted">lat/lon: ${a.stop_lat}, ${a.stop_lon}</span></div>`);
+          }
+          html.push(`<details><summary class="muted">Raw response</summary><div class="raw">${escapeHtml(JSON.stringify(res.body, null, 2))}</div></details>`);
+        }
+        html.push('</section>');
+      }
+
+      out.innerHTML = html.join('');
+    }
+
+    run();
+  </script>
+</body>
+</html>
