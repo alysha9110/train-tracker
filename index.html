@@ -11,12 +11,13 @@
     .group-title { font-weight: bold; text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.85em; color: #333; }
     h2 { font-size: 1em; margin: 1em 0 0.3em; border-bottom: 1px solid #ddd; padding-bottom: 0.2em; }
     h2.chain-title { color: #036; border-bottom-color: #036; }
-    .train { display: flex; justify-content: space-between; padding: 0.5em 0.4em; border-bottom: 1px solid #eee; align-items: baseline; }
+    .train { display: flex; justify-content: space-between; padding: 0.5em 0.4em; border-bottom: 1px solid #eee; align-items: baseline; gap: 0.6em; }
     .train:last-child { border-bottom: none; }
-    .train .mins { font-size: 1.3em; font-weight: bold; }
+    .train .mins { font-size: 1.3em; font-weight: bold; white-space: nowrap; }
     .train .mins.now, .chain .mins.now { color: #c00; }
     .train .mins.soon, .chain .mins.soon { color: #e80; }
     .train .meta { color: #666; font-size: 0.85em; text-align: right; }
+    .train .times { color: #222; font-weight: 500; }
     .chain { display: flex; gap: 0.7em; padding: 0.7em 0.5em; border-bottom: 1px solid #ddf; align-items: flex-start; background: #f4f8ff; }
     .chain:last-child { border-bottom: none; }
     .chain .mins { font-size: 1.3em; font-weight: bold; min-width: 4.5em; }
@@ -41,31 +42,26 @@
     const CITY = ['brit', 'waitemat'];
     const EAST = ['manukau', 'panmure', 'glen innes', 'meadowbank', 'sylvia', 'otahuhu'];
 
-    // Transit estimates (min). Adjust if real-world deviates.
-    const TRANSIT = {
-      orakei_to_waitemata: 10,
-      avondale_to_waitemata: 22
-    };
-    const TRANSFER_BUFFER = 3; // min between arrival and earliest catchable departure
+    const TRANSFER_BUFFER = 3;
 
     const LEGS = {
-      newmarket_avondale: { title: 'Newmarket → Avondale', stop_ids: ['115-96c3c7be'], wantDest: WEST },
-      orakei_waitemata:   { title: 'Orakei → Waitematā',   stop_ids: ['116-214837ca'], wantDest: CITY },
-      waitemata_avondale: { title: 'Waitematā → Avondale (leg 2)', stop_ids: ['133-08da14b5'], wantDest: WEST },
-      avondale_city:      { title: 'Avondale → city',      stop_ids: ['105-474861ff'], wantDest: CITY },
-      waitemata_orakei:   { title: 'Waitematā → Orakei (leg 2)', stop_ids: ['133-08da14b5'], wantDest: EAST }
+      newmarket_avondale: { title: 'Newmarket → Avondale', stop_ids: ['115-96c3c7be'], wantDest: WEST, transit: 13, arriveLabel: 'Avondale' },
+      orakei_waitemata:   { title: 'Orakei → Waitematā',   stop_ids: ['116-214837ca'], wantDest: CITY, transit: 10, arriveLabel: 'Waitematā' },
+      waitemata_avondale: { title: 'Waitematā → Avondale (leg 2)', stop_ids: ['133-08da14b5'], wantDest: WEST, transit: 22, arriveLabel: 'Avondale' },
+      avondale_newmarket: { title: 'Avondale → Newmarket', stop_ids: ['105-474861ff'], wantDest: CITY, transit: 13, arriveLabel: 'Newmarket' },
+      waitemata_orakei:   { title: 'Waitematā → Orakei (leg 2)', stop_ids: ['133-08da14b5'], wantDest: EAST, transit: 10, arriveLabel: 'Orakei' }
     };
 
     const GROUPS = [
       {
         label: 'To work',
         legs: ['newmarket_avondale', 'orakei_waitemata', 'waitemata_avondale'],
-        chain: { title: 'Orakei route — matched chain', leg1: 'orakei_waitemata', leg2: 'waitemata_avondale', transit: TRANSIT.orakei_to_waitemata, arriveLabel: 'Waitematā' }
+        chain: { title: 'Orakei route — matched chain', leg1: 'orakei_waitemata', leg2: 'waitemata_avondale' }
       },
       {
         label: 'To home',
-        legs: ['avondale_city', 'waitemata_orakei'],
-        chain: { title: 'Orakei route — matched chain', leg1: 'avondale_city', leg2: 'waitemata_orakei', transit: TRANSIT.avondale_to_waitemata, arriveLabel: 'Waitematā' }
+        legs: ['avondale_newmarket', 'waitemata_orakei'],
+        chain: { title: 'Orakei route — matched chain', leg1: 'avondale_newmarket', leg2: 'waitemata_orakei', leg1Transit: 22 }  // override: this chain uses Avondale→Waitematā transit (22), not Avondale→Newmarket (13)
       }
     ];
 
@@ -150,10 +146,7 @@
       const errors = [];
       for (const sid of leg.stop_ids) {
         const res = await fetchTrips(sid);
-        if (!res.ok) {
-          errors.push(`stop ${sid}: HTTP ${res.status}`);
-          continue;
-        }
+        if (!res.ok) { errors.push(`stop ${sid}: HTTP ${res.status}`); continue; }
         for (const t of (res.body.data || [])) trips.push(extractDeparture(t));
       }
       let filtered = trips.filter(t => matchesDirection(t.trip_headsign, leg.wantDest));
@@ -164,8 +157,8 @@
       return { trips: filtered, errors };
     }
 
-    function renderLegSection(title, data) {
-      const html = [`<h2>${escapeHtml(title)}</h2>`];
+    function renderLegSection(leg, data) {
+      const html = [`<h2>${escapeHtml(leg.title)}</h2>`];
       if (data.errors.length) html.push(`<div class="err">${escapeHtml(data.errors.join('\n'))}</div>`);
       if (data.trips.length === 0 && !data.errors.length) {
         html.push(`<div class="empty">No upcoming trains</div>`);
@@ -173,22 +166,32 @@
         for (const t of data.trips.slice(0, 3)) {
           const label = t.mins <= 0 ? 'now' : `${t.mins} min`;
           const cls = t.mins <= 1 ? 'now' : (t.mins <= 4 ? 'soon' : '');
-          const time = (t.departure_time || '').slice(0, 5);
-          html.push(`<div class="train"><span class="mins ${cls}">${escapeHtml(label)}</span><span class="meta">${escapeHtml(time)}<br>${escapeHtml(cleanHeadsign(t.trip_headsign))}</span></div>`);
+          const depTime = (t.departure_time || '').slice(0, 5);
+          const arrTime = secToHHMM(t.sec + leg.transit * 60);
+          html.push(`<div class="train"><span class="mins ${cls}">${escapeHtml(label)}</span><span class="meta"><span class="times">${escapeHtml(depTime)} → ~${escapeHtml(arrTime)}</span><br>${escapeHtml(cleanHeadsign(t.trip_headsign))}</span></div>`);
         }
       }
       return html.join('');
     }
 
-    function renderChainSection(chainCfg, leg1Data, leg2Data) {
+    function renderChainSection(chainCfg, leg1, leg2, leg1Data, leg2Data) {
+      // For home chain, leg1 transit to Waitematā differs from leg1's own arriveLabel (Newmarket).
+      const leg1Transit = chainCfg.leg1Transit != null ? chainCfg.leg1Transit : leg1.transit;
       const pairs = [];
       for (const t1 of leg1Data.trips) {
-        const arriveSec = t1.sec + chainCfg.transit * 60;
+        const arriveSec = t1.sec + leg1Transit * 60;
         const earliestBoardSec = arriveSec + TRANSFER_BUFFER * 60;
         const match = leg2Data.trips.find(t2 => t2.sec >= earliestBoardSec);
         if (match) {
           const waitMins = Math.round((match.sec - arriveSec) / 60);
-          pairs.push({ t1, t2: match, arriveTime: secToHHMM(arriveSec), waitMins });
+          const finalSec = match.sec + leg2.transit * 60;
+          pairs.push({
+            t1, t2: match,
+            transferArriveTime: secToHHMM(arriveSec),
+            finalArriveTime: secToHHMM(finalSec),
+            finalLabel: leg2.arriveLabel,
+            waitMins
+          });
         }
         if (pairs.length >= 3) break;
       }
@@ -202,8 +205,8 @@
           html.push(`<div class="chain">
             <span class="mins ${cls}">${escapeHtml(label)}</span>
             <div class="chain-detail">
-              <div class="main">Catch ${escapeHtml(p.t1.departure_time.slice(0,5))} → arrive ${escapeHtml(chainCfg.arriveLabel)} ~${escapeHtml(p.arriveTime)}</div>
-              <div class="sub">Board ${escapeHtml(p.t2.departure_time.slice(0,5))} — ${p.waitMins} min transfer</div>
+              <div class="main">Catch ${escapeHtml(p.t1.departure_time.slice(0,5))} → arrive Waitematā ~${escapeHtml(p.transferArriveTime)}</div>
+              <div class="sub">Board ${escapeHtml(p.t2.departure_time.slice(0,5))} — ${p.waitMins} min transfer → arrive ${escapeHtml(p.finalLabel)} ~${escapeHtml(p.finalArriveTime)}</div>
             </div>
           </div>`);
         }
@@ -219,22 +222,19 @@
       const p = nzDateParts();
       const nowSec = parseInt(p.hour, 10) * 3600 + parseInt(p.minute, 10) * 60;
 
-      // Fetch each unique leg once
       const legData = {};
       const uniqueLegs = new Set();
       for (const g of GROUPS) {
         for (const id of g.legs) uniqueLegs.add(id);
         if (g.chain) { uniqueLegs.add(g.chain.leg1); uniqueLegs.add(g.chain.leg2); }
       }
-      for (const id of uniqueLegs) {
-        legData[id] = await getLegTrips(LEGS[id], nowSec);
-      }
+      for (const id of uniqueLegs) legData[id] = await getLegTrips(LEGS[id], nowSec);
 
       const parts = [];
       for (const g of GROUPS) {
         parts.push(`<div class="group"><div class="group-title">${escapeHtml(g.label)}</div>`);
-        for (const id of g.legs) parts.push(renderLegSection(LEGS[id].title, legData[id]));
-        if (g.chain) parts.push(renderChainSection(g.chain, legData[g.chain.leg1], legData[g.chain.leg2]));
+        for (const id of g.legs) parts.push(renderLegSection(LEGS[id], legData[id]));
+        if (g.chain) parts.push(renderChainSection(g.chain, LEGS[g.chain.leg1], LEGS[g.chain.leg2], legData[g.chain.leg1], legData[g.chain.leg2]));
         parts.push('</div>');
       }
       out.innerHTML = parts.join('');
