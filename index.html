@@ -24,6 +24,13 @@
     .chain-detail { flex: 1; font-size: 0.9em; }
     .chain-detail .main { font-weight: 500; }
     .chain-detail .sub { color: #555; font-size: 0.88em; margin-top: 0.1em; }
+    .chain-detail .total { color: #036; font-weight: 600; }
+    .wait { font-weight: 600; padding: 0.05em 0.4em; border-radius: 3px; white-space: nowrap; }
+    .wait.bad   { color: #fff; background: #c00; }
+    .wait.tight { color: #fff; background: #e80; }
+    .wait.good  { color: #fff; background: #283; }
+    .wait.slow  { color: #333; background: #fd5; }
+    .wait.long  { color: #444; background: #ccc; }
     .err { color: #b00; white-space: pre-wrap; font-family: monospace; font-size: 0.8em; background: #fee; padding: 0.5em; border-radius: 4px; }
     button { padding: 0.6em 1.4em; font-size: 1em; }
     .muted { color: #888; font-size: 0.85em; }
@@ -45,19 +52,21 @@
       newmarket: '115-96c3c7be',
       orakei:    '116-214837ca',
       waitemata: '133-08da14b5',
-      avondale:  '105-474861ff'
+      avondale:  '105-474861ff',
+      remuera:   '114-c06f0e9c'
     };
 
     const STOP_LABEL = {
-      newmarket: 'Newmarket', orakei: 'Orakei', waitemata: 'Waitematā', avondale: 'Avondale'
+      newmarket: 'Newmarket', orakei: 'Orakei', waitemata: 'Waitematā', avondale: 'Avondale', remuera: 'Remuera'
     };
 
     const LEGS = {
-      newmarket_avondale: { title: 'Newmarket → Avondale', from: 'newmarket', to: 'avondale',  wantDest: WEST },
-      orakei_waitemata:   { title: 'Orakei → Waitematā',   from: 'orakei',    to: 'waitemata', wantDest: CITY },
-      waitemata_avondale: { title: 'Waitematā → Avondale (leg 2)', from: 'waitemata', to: 'avondale', wantDest: WEST },
-      avondale_newmarket: { title: 'Avondale → Newmarket', from: 'avondale',  to: 'newmarket', wantDest: CITY },
-      waitemata_orakei:   { title: 'Waitematā → Orakei (leg 2)', from: 'waitemata', to: 'orakei', wantDest: EAST }
+      newmarket_avondale: { title: 'Newmarket → Avondale (direct)',     from: 'newmarket', to: 'avondale',  wantDest: WEST },
+      remuera_newmarket:  { title: 'Remuera → Newmarket',               from: 'remuera',   to: 'newmarket', wantDest: CITY },
+      orakei_waitemata:   { title: 'Orakei → Waitematā',                from: 'orakei',    to: 'waitemata', wantDest: CITY },
+      waitemata_avondale: { title: 'Waitematā → Avondale (leg 2)',      from: 'waitemata', to: 'avondale',  wantDest: WEST },
+      avondale_newmarket: { title: 'Avondale → Newmarket',              from: 'avondale',  to: 'newmarket', wantDest: CITY },
+      waitemata_orakei:   { title: 'Waitematā → Orakei (leg 2)',        from: 'waitemata', to: 'orakei',    wantDest: EAST }
     };
 
     const TRANSFER_BUFFER = 3;
@@ -65,13 +74,18 @@
     const GROUPS = [
       {
         label: 'To work',
-        legs: ['newmarket_avondale', 'orakei_waitemata', 'waitemata_avondale'],
-        chain: { title: 'Orakei route — matched chain', leg1: 'orakei_waitemata', leg2: 'waitemata_avondale' }
+        legs: ['newmarket_avondale', 'remuera_newmarket', 'orakei_waitemata', 'waitemata_avondale'],
+        chains: [
+          { title: 'Remuera route — matched chain', leg1: 'remuera_newmarket', leg2: 'newmarket_avondale' },
+          { title: 'Orakei route — matched chain',  leg1: 'orakei_waitemata',  leg2: 'waitemata_avondale' }
+        ]
       },
       {
         label: 'To home',
         legs: ['avondale_newmarket', 'waitemata_orakei'],
-        chain: { title: 'Orakei route — matched chain', leg1: 'avondale_newmarket', leg1ArriveStop: 'waitemata', leg2: 'waitemata_orakei' }
+        chains: [
+          { title: 'Orakei route — matched chain', leg1: 'avondale_newmarket', leg1ArriveStop: 'waitemata', leg2: 'waitemata_orakei' }
+        ]
       }
     ];
 
@@ -123,6 +137,14 @@
       return (headsign || '').replace(/\s\d+\b/g, '').replace(/\bTo\b/g, '→').replace(/\bVia\b/g, 'via').trim();
     }
 
+    function waitClass(mins) {
+      if (mins <= 2)  return 'bad';
+      if (mins === 3) return 'tight';
+      if (mins <= 6)  return 'good';
+      if (mins <= 12) return 'slow';
+      return 'long';
+    }
+
     function extractTrip(item) {
       const a = item.attributes || item;
       return {
@@ -159,7 +181,8 @@
           const mins = depSec == null ? null : Math.round((depSec - nowSec) / 60);
           const destTrip = dest?.byTripId?.[t.trip_id];
           const arrSec = destTrip ? parseTime(destTrip.arrival_time) : null;
-          return { ...t, depSec, arrSec, mins };
+          const arrMins = arrSec != null ? Math.round((arrSec - nowSec) / 60) : null;
+          return { ...t, depSec, arrSec, mins, arrMins };
         })
         .filter(t => t.depSec != null && t.mins >= -1)
         .sort((a, b) => a.depSec - b.depSec);
@@ -184,7 +207,7 @@
       return html.join('');
     }
 
-    function renderChainSection(chainCfg, stopData, legData) {
+    function renderChainSection(chainCfg, stopData, legData, nowSec) {
       const leg1 = LEGS[chainCfg.leg1], leg2 = LEGS[chainCfg.leg2];
       const transferStopKey = chainCfg.leg1ArriveStop || leg1.to;
       const transferStop = stopData[transferStopKey];
@@ -204,7 +227,8 @@
             transferArriveTime: secToHHMM(arriveSec),
             finalArriveTime: match.arrSec != null ? secToHHMM(match.arrSec) : null,
             finalLabel: STOP_LABEL[leg2.to] || leg2.to,
-            waitMins: Math.round((match.depSec - arriveSec) / 60)
+            waitMins: Math.round((match.depSec - arriveSec) / 60),
+            totalMins: match.arrMins != null ? match.arrMins : null
           });
         }
         if (pairs.length >= 3) break;
@@ -217,12 +241,14 @@
         for (const p of pairs) {
           const label = p.t1.mins <= 0 ? 'now' : `${p.t1.mins} min`;
           const cls = p.t1.mins <= 1 ? 'now' : (p.t1.mins <= 4 ? 'soon' : '');
+          const wcls = waitClass(p.waitMins);
           const finalStr = p.finalArriveTime ? ` → arrive ${escapeHtml(p.finalLabel)} ${escapeHtml(p.finalArriveTime)}` : '';
+          const totalStr = p.totalMins != null ? ` <span class="total">(${p.totalMins} min total)</span>` : '';
           html.push(`<div class="chain">
             <span class="mins ${cls}">${escapeHtml(label)}</span>
             <div class="chain-detail">
               <div class="main">Catch ${escapeHtml(p.t1.departure_time.slice(0,5))} → arrive ${escapeHtml(transferLabel)} ${escapeHtml(p.transferArriveTime)}</div>
-              <div class="sub">Board ${escapeHtml(p.t2.departure_time.slice(0,5))} — ${p.waitMins} min transfer${finalStr}</div>
+              <div class="sub">Board ${escapeHtml(p.t2.departure_time.slice(0,5))} — <span class="wait ${wcls}">${p.waitMins} min transfer</span>${finalStr}${totalStr}</div>
             </div>
           </div>`);
         }
@@ -238,13 +264,11 @@
       const p = nzDateParts();
       const nowSec = parseInt(p.hour, 10) * 3600 + parseInt(p.minute, 10) * 60;
 
-      // Fetch each unique stop once (parallel)
       const stopKeys = Object.keys(STOPS);
       const stopResults = await Promise.all(stopKeys.map(k => fetchStop(STOPS[k])));
       const stopData = {};
       stopKeys.forEach((k, i) => { stopData[k] = stopResults[i]; });
 
-      // Compute filtered trips per leg (join origin departures with destination arrivals)
       const legData = {};
       for (const id of Object.keys(LEGS)) legData[id] = buildLegTrips(id, stopData, nowSec);
 
@@ -252,7 +276,7 @@
       for (const g of GROUPS) {
         parts.push(`<div class="group"><div class="group-title">${escapeHtml(g.label)}</div>`);
         for (const id of g.legs) parts.push(renderLegSection(LEGS[id], legData[id]));
-        if (g.chain) parts.push(renderChainSection(g.chain, stopData, legData));
+        if (g.chains) for (const c of g.chains) parts.push(renderChainSection(c, stopData, legData, nowSec));
         parts.push('</div>');
       }
       out.innerHTML = parts.join('');
